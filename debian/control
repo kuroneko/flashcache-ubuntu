@@ -1,0 +1,26 @@
+Source: flashcache
+Section: kernel
+Priority: extra
+Maintainer: Chris Collins <chrisc@vrlaw.com.au>
+Build-Depends: debhelper (>= 8.0.0), bzip2
+Standards-Version: 3.9.2
+Homepage: https://github.com/facebook/flashcache/
+Vcs-Git: git://github.com/kuroneko/flashcache.git
+Vcs-Browser: https://github.com/kuroneko/flashcache
+
+Package: flashcache-utils
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Suggests: flashcache-source
+Description: Utilities to interface with and initialise flashcache
+ This package contains the tools required to initialise and maintain
+ SSD cache volumes.
+
+Package: flashcache-source
+Architecture: all
+Depends: module-assistant, debhelper (>= 7), make, bzip2
+Suggests: flashcache-utils
+Description: source for the flashcache driver.
+ This package provides the source code for the flashcache kernel modules.
+ The flashcache package is also required in order to make use of these
+ modules. Kernel source or headers are required to compile these modules.

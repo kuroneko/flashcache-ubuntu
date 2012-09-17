@@ -1,0 +1,8 @@
+src/utils/flashcache_create /sbin/
+src/utils/flashcache_destroy /sbin/
+src/utils/flashcache_load /sbin/
+src/utils/flashcache_setioctl /usr/sbin/
+utils/flashstat /usr/sbin/
+src/utils/get_agsize /usr/lib/flashcache-utils
+src/flashcache.hook /etc/initramfs-tools/hooks/flashcache
+src/utils/flashcache_scan /etc/initramfs-tools/scripts/init-premount/
