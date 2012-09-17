@@ -28,6 +28,9 @@ clean:
 	-$(MAKE) -C src/utils clean
 	#-$(MAKE) clean
 	rm -f debian/flashcache-dkms.install
+	rm -f debian/flashcache-dkms.dirs
+	rm -f debian/flashcache-dkms.prerm
+	rm -f debian/flashcache-dkms.postinst
 	dh_clean
 
 debian/flashcache-dkms.install:	debian/flashcache-dkms.install.in
@@ -45,7 +48,6 @@ install: build debian/flashcache-dkms.install debian/flashcache-dkms.dirs src/dk
 	dh_prep
 	dh_installdirs
 	dh_install
-	install -m 755 common.postinst $(CURDIR)/debian/flashcache-dkms/usr/share/flashcache-dkms/postinst
 	install -m 755 -o root -g root src/flashcache.hook $(CURDIR)/debian/flashcache-utils/etc/initramfs-tools/hooks/flashcache
 	#$(MAKE) DESTDIR=$(CURDIR)/debian/$(DEB_NAME)-dkms NAME=$(NAME) VERSION=$(VERSION) install
 
@@ -62,7 +64,13 @@ binary-arch: build install
 	dh_md5sums
 	dh_builddeb
 
-binary-indep: build install
+debian/flashcache-dkms.prerm:	debian/flashcache-dkms.prerm.in
+	sed -e 's/%VERSION/$(VERSION)/g' <$< >$@
+
+debian/flashcache-dkms.postinst:	debian/flashcache-dkms.postinst.in
+	sed -e 's/%VERSION/$(VERSION)/g' <$< >$@
+
+binary-indep: build install debian/flashcache-dkms.prerm debian/flashcache-dkms.postinst
 	dh_testdir
 	dh_testroot
 	dh_link

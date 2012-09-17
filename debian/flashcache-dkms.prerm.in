@@ -1,7 +1,7 @@
 #!/bin/sh
 
 NAME=flashcache
-VERSION=1.0-156-g5e5f71e
+VERSION=%VERSION
 
 set -e
 
