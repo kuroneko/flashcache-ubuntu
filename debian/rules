@@ -39,7 +39,7 @@ debian/flashcache-dkms.dirs:	debian/flashcache-dkms.dirs.in
 src/dkms.conf:	src/dkms.conf.in
 	sed -e 's/%VERSION/$(VERSION)/g' <$< >$@
 
-install: build debian/flashcache-dkms.install debian/flashcache-dkms.dirs.in src/dkms.conf
+install: build debian/flashcache-dkms.install debian/flashcache-dkms.dirs src/dkms.conf
 	dh_testdir
 	dh_testroot
 	dh_prep
