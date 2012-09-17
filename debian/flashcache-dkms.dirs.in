@@ -1,2 +1,2 @@
-usr/src/flashcache-%VERSION
+var/lib/dkms/flashcache/%VERSION/source
 usr/share/flashcache-dkms

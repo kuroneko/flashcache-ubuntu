@@ -1,4 +1,4 @@
-src/dkms.conf		usr/src/flashcache-%VERSION
-src/Makefile		usr/src/flashcache-%VERSION
-src/*.h			usr/src/flashcache-%VERSION
-src/*.c			usr/src/flashcache-%VERSION
+src/dkms.conf		var/lib/dkms/flashcache/%VERSION/source
+src/Makefile		var/lib/dkms/flashcache/%VERSION/source
+src/*.h			var/lib/dkms/flashcache/%VERSION/source
+src/*.c			var/lib/dkms/flashcache/%VERSION/source
