@@ -1,0 +1,6 @@
+\#*
+*~
+*.swp
+debian/flashcache-dkms.dirs
+debian/flashcache-dkms.install
+src/dkms.conf
