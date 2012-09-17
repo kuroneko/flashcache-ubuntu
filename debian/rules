@@ -46,7 +46,7 @@ install: build debian/flashcache-dkms.install debian/flashcache-dkms.dirs.in src
 	dh_installdirs
 	dh_install
 	install -m 755 common.postinst $(CURDIR)/debian/flashcache-dkms/usr/share/flashcache-dkms/postinst
-	install -m 755 -o root -g root src/flashcache.hook $(CURDIR)/debian/flashcache-dkms/etc/initramfs-tools/hooks/flashcache
+	install -m 755 -o root -g root src/flashcache.hook $(CURDIR)/debian/flashcache-utils/etc/initramfs-tools/hooks/flashcache
 	#$(MAKE) DESTDIR=$(CURDIR)/debian/$(DEB_NAME)-dkms NAME=$(NAME) VERSION=$(VERSION) install
 
 binary-arch: build install
