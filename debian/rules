@@ -6,17 +6,11 @@
 
 DEB_NAME=flashcache
 NAME=flashcache
-VERSION=1.0-156-g5e5f71e
-
-configure: configure-stamp
-configure-stamp:
-	dh_testdir
-	touch configure-stamp
-
+VERSION=$(shell dpkg-parsechangelog | grep Version | cut -d\  -f2)
 
 build: build-stamp
 
-build-stamp: configure-stamp 
+build-stamp:
 	dh_testdir
 	$(MAKE) -C src/utils all
 	touch $@
@@ -49,6 +43,8 @@ install: build debian/flashcache-dkms.install debian/flashcache-dkms.dirs src/dk
 	dh_installdirs
 	dh_install
 	install -m 755 -o root -g root src/flashcache.hook $(CURDIR)/debian/flashcache-utils/etc/initramfs-tools/hooks/flashcache
+	dh_installdocs
+	dh_installchangelogs
 	#$(MAKE) DESTDIR=$(CURDIR)/debian/$(DEB_NAME)-dkms NAME=$(NAME) VERSION=$(VERSION) install
 
 binary-arch: build install
