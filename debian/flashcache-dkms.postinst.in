@@ -7,6 +7,7 @@ VERSION=%VERSION
 
 case "$1" in
 	configure)
+		dkms build -m $NAME -v $VERSION
 		dkms install -m $NAME -v $VERSION
 	;;
 
