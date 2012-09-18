@@ -37,7 +37,7 @@ debian/flashcache-dkms.dirs:	debian/flashcache-dkms.dirs.in
 	sed -e 's/%VERSION/$(VERSION)/g' <$< >$@
 
 src/dkms.conf:	src/dkms.conf.in
-	sed -e 's/%VERSION/$(VERSION)/g' -e 's/%COMMIT_REV/$COMMIT_REV/g' <$< >$@
+	sed -e 's/%VERSION/$(VERSION)/g' -e 's/%COMMIT_REV/$(COMMIT_REV)/g' <$< >$@
 
 install: build debian/flashcache-dkms.install debian/flashcache-dkms.dirs src/dkms.conf
 	dh_testdir
