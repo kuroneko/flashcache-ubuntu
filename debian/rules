@@ -9,6 +9,7 @@ NAME=flashcache
 VERSION=$(shell dpkg-parsechangelog | grep Version | cut -d\  -f2)
 # COMMIT_REV is imprinted into various tools and the module.
 COMMIT_REV=$(shell dpkg-parsechangelog | grep Version | cut -d\  -f2 | cut -d- -f1-3)
+export COMMIT_REV
 
 build: build-stamp
 
@@ -21,7 +22,7 @@ clean:
 	dh_testdir
 	dh_testroot
 	rm -f build-stamp configure-stamp
-	-$(MAKE) -C src/utils clean COMMIT_REV=$(COMMIT_REV)
+	-$(MAKE) -C src/utils clean
 	#-$(MAKE) clean
 	$(RM) debian/flashcache-dkms.install
 	$(RM) debian/flashcache-dkms.dirs

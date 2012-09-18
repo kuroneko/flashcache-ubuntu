@@ -3,7 +3,7 @@ flashcache (1.0-156-g5e5f71ed7cdc-1) unstable; urgency=low
   * Fix version number.
   * Fix build process to imprint version number correctly.
 
- -- Chris Collins <chrisc@vrlaw.com.au>  Tue, 18 Sep 2012 16:21:23 +1000
+ -- Chris Collins <chrisc@vrlaw.com.au>  Tue, 18 Sep 2012 16:32:15 +1000
 
 flashcache (1.0-156-g5e5f71e-3) unstable; urgency=low
 
