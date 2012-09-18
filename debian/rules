@@ -7,6 +7,8 @@
 DEB_NAME=flashcache
 NAME=flashcache
 VERSION=$(shell dpkg-parsechangelog | grep Version | cut -d\  -f2)
+# COMMIT_REV is imprinted into various tools and the module.
+COMMIT_REV=$(shell dpkg-parsechangelog | grep Version | cut -d\  -f2 | cut -d- -f1-3)
 
 build: build-stamp
 
@@ -19,12 +21,13 @@ clean:
 	dh_testdir
 	dh_testroot
 	rm -f build-stamp configure-stamp
-	-$(MAKE) -C src/utils clean
+	-$(MAKE) -C src/utils clean COMMIT_REV=$(COMMIT_REV)
 	#-$(MAKE) clean
-	rm -f debian/flashcache-dkms.install
-	rm -f debian/flashcache-dkms.dirs
-	rm -f debian/flashcache-dkms.prerm
-	rm -f debian/flashcache-dkms.postinst
+	$(RM) debian/flashcache-dkms.install
+	$(RM) debian/flashcache-dkms.dirs
+	$(RM) debian/flashcache-dkms.prerm
+	$(RM) debian/flashcache-dkms.postinst
+	$(RM) src/dkms.conf
 	dh_clean
 
 debian/flashcache-dkms.install:	debian/flashcache-dkms.install.in
@@ -34,7 +37,7 @@ debian/flashcache-dkms.dirs:	debian/flashcache-dkms.dirs.in
 	sed -e 's/%VERSION/$(VERSION)/g' <$< >$@
 
 src/dkms.conf:	src/dkms.conf.in
-	sed -e 's/%VERSION/$(VERSION)/g' <$< >$@
+	sed -e 's/%VERSION/$(VERSION)/g' -e 's/%COMMIT_REV/$COMMIT_REV/g' <$< >$@
 
 install: build debian/flashcache-dkms.install debian/flashcache-dkms.dirs src/dkms.conf
 	dh_testdir
