@@ -7,8 +7,9 @@ Standards-Version: 3.8.1
 
 Package: flashcache-utils
 Architecture: any
-Suggests: flashcache-dkms
+Suggests: flashcache-dkms (= ${binary:Version})
 Depends: ${misc:Depends}
+Breaks: flashcache-dkms (<< ${binary:Version})
 Description: Utilities and hooks required to use flashcache
  The flashcache SSD cache requires a number of utilities
  to be usable.  These utilities are included in this package.
@@ -18,7 +19,9 @@ Description: Utilities and hooks required to use flashcache
 
 Package: flashcache-dkms
 Architecture: all
+Suggests: flashcache-utils (= ${binary:Version})
 Depends: dkms (>= 1.95), ${misc:Depends}
+Breaks: flashcache-utils (<< ${binary:Version})
 Description: SSD Block Device Cache - DKMS module
  flashcache provides a caching layer for traditional disks
  on top of a Solid State Disk (SSD), the idea being that

@@ -1,3 +1,10 @@
+flashcache (1.0-156-g5e5f71ed7cdc-2) unstable; urgency=low
+
+  * Make sure that flashcache-dkms + flashcache-utils are in step with
+    each other.
+
+ -- Chris Collins <chrisc@vrlaw.com.au>  Tue, 18 Sep 2012 16:55:56 +1000
+
 flashcache (1.0-156-g5e5f71ed7cdc-1) unstable; urgency=low
 
   * Fix version number.
