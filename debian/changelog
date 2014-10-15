@@ -1,3 +1,9 @@
+flashcache (1.0-226-gd3594998ce60-1) unstable; urgency=low
+
+  * New upstream release (3.1.2).
+
+ -- Chris Collins <chrisc@vrlaw.com.au>  Wed, 15 Oct 2014 12:20:16 +1100
+
 flashcache (1.0-163-g833b993330dd-1) unstable; urgency=low
 
   * New upstream release.
