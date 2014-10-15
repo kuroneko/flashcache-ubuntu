@@ -16,8 +16,16 @@ ifneq "$(RHEL5_VER)" ""
 	KERNEL_TREE := $(RHEL5_TREE)
 endif
 
+# Check for OpenVZ (/proc/vz)
+OPENVZ_VER ?= $(shell if [ -e /proc/vz ]; then grep 5.[0-9] /etc/redhat-release; else false; fi)
+ifneq "$(OPENVZ_VER)" ""
+        RHEL5_SPEC := /usr/src/redhat/SPECS/kernel-ovz.spec
+        RHEL5_TREE := /usr/src/redhat/BUILD/ovzkernel-2.6.18/linux-$(shell uname -r).$(shell uname -i)
+        KERNEL_TREE := $(RHEL5_TREE)
+endif
+
 obj-m += flashcache.o
-flashcache-objs := flashcache_conf.o flashcache_main.o flashcache_subr.o flashcache_ioctl.o flashcache_procfs.o
+flashcache-objs := flashcache_conf.o flashcache_main.o flashcache_subr.o flashcache_ioctl.o flashcache_procfs.o flashcache_reclaim.o
 
 .PHONY: all
 all: modules utils
@@ -33,7 +41,8 @@ utils:
 .PHONY: modules_install
 modules_install: modules
 	install -o root -g root -m 0755 -d $(DESTDIR)/lib/modules/$(KERNEL_SOURCE_VERSION)/extra/flashcache/
-	install -o root -g root -m 0644 flashcache.ko $(DESTDIR)/lib/modules/$(KERNEL_SOURCE_VERSION)/extra/flashcache/
+	install -o root -g root -m 0755 flashcache.ko $(DESTDIR)/lib/modules/$(KERNEL_SOURCE_VERSION)/extra/flashcache/
+	depmod -a $(KERNEL_SOURCE_VERSION)
 
 .PHONY: utils_install
 utils_install: utils
@@ -43,12 +52,8 @@ utils_install: utils
 ocf_install:
 	make -C ocf install
 
-.PHONY: depmod
-depmod:
-	depmod -a
-
 .PHONY: install
-install: modules_install utils_install ocf_install depmod
+install: modules_install utils_install ocf_install
 
 .PHONY: clean
 clean:

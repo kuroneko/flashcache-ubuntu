@@ -51,15 +51,15 @@ usage(char *pname)
 }
 
 char *pname;
+char *sb_buf;
 char *buf;
 
+int
 main(int argc, char **argv)
 {
-	int cache_fd, disk_fd, c;
-	char *disk_devname, *ssd_devname, *cachedev;
+	int cache_fd, c;
+	char *ssd_devname;
 	struct flash_superblock *sb;
-	sector_t cache_devsize, disk_devsize;
-	sector_t block_size = 0;
 	u_int64_t md_block_bytes = 0;
 	u_int64_t md_slots_per_block = 0;
 	u_int64_t cache_size = 0;
@@ -84,16 +84,16 @@ main(int argc, char **argv)
 		exit(1);
 	}
         lseek(cache_fd, 0, SEEK_SET);
-	buf = (char *)malloc(512);
-	if (!buf) {
+	sb_buf = (char *)malloc(512);
+	if (!sb_buf) {
 		fprintf(stderr, "Failed to allocate sector buffer\n");
 		exit(1);
 	}
-	if (read(cache_fd, buf, 512) < 0) {
+	if (read(cache_fd, sb_buf, 512) < 0) {
 		fprintf(stderr, "Cannot read Flashcache superblock %s\n", ssd_devname);
 		exit(1);		
 	}
-	sb = (struct flash_superblock *)buf;
+	sb = (struct flash_superblock *)sb_buf;
 	if (!(sb->cache_sb_state == CACHE_MD_STATE_DIRTY ||
 	      sb->cache_sb_state == CACHE_MD_STATE_CLEAN ||
 	      sb->cache_sb_state == CACHE_MD_STATE_FASTCLEAN ||
@@ -113,7 +113,6 @@ main(int argc, char **argv)
         lseek(cache_fd, md_block_bytes, SEEK_SET); /* lseek past the superblock to first MD slot */
 	md_slots_per_block = (md_block_bytes / (sizeof(struct flash_cacheblock)));
 
-	free(buf);
 	buf = (char *)malloc(md_block_bytes);
 	if (!buf) {
 		fprintf(stderr, "Failed to allocate sector buffer\n");
@@ -154,8 +153,9 @@ main(int argc, char **argv)
 		pname, ssd_devname);
 	sb->cache_sb_state = 0;
         lseek(cache_fd, 0, SEEK_SET);
-	if (write(cache_fd, buf, 512) < 0) {
+	if (write(cache_fd, sb_buf, 512) < 0) {
 		fprintf(stderr, "Cannot write Flashcache superblock %s\n", ssd_devname);
 		exit(1);		
 	}
+	return 0;
 }
