@@ -40,6 +40,7 @@
 #include <linux/sort.h>
 #include <linux/time.h>
 #include <asm/kmap_types.h>
+#include <linux/jhash.h>
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,26)
 #include "dm.h"
@@ -57,6 +58,15 @@
 #include "flashcache.h"
 
 static DEFINE_SPINLOCK(_job_lock);
+
+static void
+flashcache_merge_writes_old(struct cache_c *dmc, struct dbn_index_pair *writes_list, 
+			    struct dbn_index_pair *set_dirty_list,
+			    int *nr_writes, int set);
+static void
+flashcache_merge_writes_new(struct cache_c *dmc, struct dbn_index_pair *writes_list, 
+			    struct dbn_index_pair *set_dirty_list,
+			    int *nr_writes, int set);
 
 extern mempool_t *_job_pool;
 extern mempool_t *_pending_job_pool;
@@ -138,14 +148,224 @@ flashcache_free_pending_job(struct pending_job *job)
 	atomic_dec(&nr_pending_jobs);
 }
 
+int
+flashcache_invalid_get(struct cache_c *dmc, int set)
+{
+	struct cache_set *cache_set;
+	int index;
+	struct cacheblock *cacheblk;
+
+	cache_set = &dmc->cache_sets[set];
+	index = cache_set->invalid_head;
+	if (index == FLASHCACHE_NULL)
+		return -1;
+	index += (set * dmc->assoc);
+	cacheblk = &dmc->cache[index];
+	VERIFY(cacheblk->cache_state == INVALID);
+	flashcache_invalid_remove(dmc, index);
+	return index;
+}
+
+void
+flashcache_invalid_insert(struct cache_c *dmc, int index)
+{
+	struct cache_set *cache_set;
+	struct cacheblock *cacheblk;
+	int set = index / dmc->assoc;
+	int start_index = set * dmc->assoc;
+	int set_ix = index % dmc->assoc;
+	
+	/* index validity checks */
+	VERIFY(index >= 0);
+	VERIFY(index < dmc->size);
+	cacheblk = &dmc->cache[index];
+	/* It has to be an INVALID block */
+	VERIFY(cacheblk->cache_state == INVALID);
+	/* It cannot be on the per-set hash */
+	VERIFY(cacheblk->hash_prev == FLASHCACHE_NULL);
+	VERIFY(cacheblk->hash_next == FLASHCACHE_NULL);
+	/* Insert this block at the head of the invalid list */
+	cache_set = &dmc->cache_sets[set];
+	cacheblk->hash_next = cache_set->invalid_head;
+	if (cache_set->invalid_head != FLASHCACHE_NULL)
+		dmc->cache[start_index + cache_set->invalid_head].hash_prev = set_ix;
+	cache_set->invalid_head = set_ix;
+}
+
+void
+flashcache_invalid_remove(struct cache_c *dmc, int index)
+{
+	struct cache_set *cache_set;
+	struct cacheblock *cacheblk;
+	int start_index, set;
+
+	/* index validity checks */
+	VERIFY(index >= 0);
+	VERIFY(index < dmc->size);
+	cacheblk = &dmc->cache[index];
+	/* It has to be an INVALID block */
+	VERIFY(cacheblk->cache_state == INVALID);
+	set = index / dmc->assoc;
+	start_index = set * dmc-> assoc;
+	cache_set = &dmc->cache_sets[set];
+	if (cacheblk->hash_prev != FLASHCACHE_NULL) {
+		dmc->cache[start_index + cacheblk->hash_prev].hash_next = 
+			cacheblk->hash_next;
+	} else
+		cache_set->invalid_head = cacheblk->hash_next;
+	if (cacheblk->hash_next != FLASHCACHE_NULL) {
+		dmc->cache[start_index + cacheblk->hash_next].hash_prev = 
+			cacheblk->hash_prev;
+	}
+	cacheblk->hash_prev = FLASHCACHE_NULL;
+	cacheblk->hash_next = FLASHCACHE_NULL;
+	
+}
+
+/* Cache set block hash management */
+void
+flashcache_hash_init(struct cache_c *dmc)
+{
+	struct cache_set *cache_set;
+	int i, j;
+	
+	for (i = 0 ; i < (dmc->size >> dmc->assoc_shift) ; i++) {
+		cache_set = &dmc->cache_sets[i];
+		cache_set->invalid_head = FLASHCACHE_NULL;
+		for (j = 0 ; j < NUM_BLOCK_HASH_BUCKETS ; j++) 
+			cache_set->hash_buckets[j] = FLASHCACHE_NULL;
+	}
+}
+
+void
+flashcache_hash_destroy(struct cache_c *dmc)
+{
+}
+
+static inline u_int16_t *
+flashcache_get_hash_bucket(struct cache_c *dmc, struct cache_set *cache_set, sector_t dbn)
+{
+	unsigned int hash = jhash_1word(dbn, 0xfeed);
+	
+	return &cache_set->hash_buckets[hash % NUM_BLOCK_HASH_BUCKETS];
+}
+
+void
+flashcache_hash_remove(struct cache_c *dmc, int index)
+{
+	struct cache_set *cache_set;
+	struct cacheblock *cacheblk;
+	u_int16_t *hash_bucket;
+	int start_index, set;
+	
+	if (index == -1)
+		return;
+	set = index / dmc->assoc;
+	cache_set = &dmc->cache_sets[set];
+	cacheblk = &dmc->cache[index];
+	VERIFY(cacheblk->cache_state & VALID);
+	start_index = set * dmc-> assoc;
+	hash_bucket = flashcache_get_hash_bucket(dmc, cache_set, cacheblk->dbn);
+	if (cacheblk->hash_prev != FLASHCACHE_NULL) {
+		dmc->cache[start_index + cacheblk->hash_prev].hash_next = 
+			cacheblk->hash_next;
+	} else
+		*hash_bucket = cacheblk->hash_next;
+	if (cacheblk->hash_next != FLASHCACHE_NULL) {
+		dmc->cache[start_index + cacheblk->hash_next].hash_prev = 
+			cacheblk->hash_prev;
+	}
+	cacheblk->hash_prev = FLASHCACHE_NULL;
+	cacheblk->hash_next = FLASHCACHE_NULL;
+}
+
+/* Must return -1 if not found ! */
+int
+flashcache_hash_lookup(struct cache_c *dmc, 
+		       int set,
+		       sector_t dbn)
+{
+	struct cache_set *cache_set = &dmc->cache_sets[set];
+	int index;
+	struct cacheblock *cacheblk;
+	u_int16_t set_ix;
+#if 0
+	int start_index, end_index, i;
+#endif
+	
+	set_ix = *flashcache_get_hash_bucket(dmc, cache_set, dbn);
+	while (set_ix != FLASHCACHE_NULL) {
+		index = set * dmc->assoc + set_ix;
+		cacheblk = &dmc->cache[index];
+		/* Only VALID blocks on the hash queue */
+		VERIFY(cacheblk->cache_state & VALID);
+		VERIFY((cacheblk->cache_state & INVALID) == 0);
+		if (dbn == cacheblk->dbn)
+			return index;
+		set_ix = cacheblk->hash_next;
+	}
+#if 0
+	/*
+	 * Debugging. We didn't find the block on the hash.
+	 * Make sure it is NOT in this set and VALID !
+	 */
+	start_index = set * dmc->assoc;
+	end_index = start_index + dmc->assoc;
+	for (i = start_index ; i < end_index ; i++) {
+		cacheblk = &dmc->cache[i];
+		if (dbn == cacheblk->dbn && (cacheblk->cache_state & VALID)) {
+			printk(KERN_ERR "Did not find block in hash but found block in set !\n");
+			printk(KERN_ERR "cacheblk->cache_state = %x\n",
+			       cacheblk->cache_state);
+			VERIFY(0);
+			panic("Did not find block in hash but found block in set !\n");
+		}		
+	}
+#endif
+	return -1;
+}
+
+/*
+ * Cacheblock should be VALID and should NOT be on a hash bucket already.
+ */
+void
+flashcache_hash_insert(struct cache_c *dmc, 
+		       int index)
+{
+	struct cache_set *cache_set = &dmc->cache_sets[index / dmc->assoc];
+	struct cacheblock *cacheblk;
+	u_int16_t *hash_bucket;
+	u_int16_t set_ix = index % dmc->assoc;
+	int start_index = (index / dmc->assoc) * dmc->assoc;
+	
+	cacheblk = &dmc->cache[index];
+	VERIFY(cacheblk->cache_state & VALID);
+	hash_bucket = flashcache_get_hash_bucket(dmc, cache_set, cacheblk->dbn);
+	VERIFY(cacheblk->hash_prev == FLASHCACHE_NULL);
+	VERIFY(cacheblk->hash_next == FLASHCACHE_NULL);
+	cacheblk->hash_prev = FLASHCACHE_NULL;
+	cacheblk->hash_next = *hash_bucket;
+	if (*hash_bucket != FLASHCACHE_NULL)
+		dmc->cache[start_index + *hash_bucket].hash_prev = set_ix;
+	*hash_bucket = set_ix;
+}
+
 #define FLASHCACHE_PENDING_JOB_HASH(INDEX)		((INDEX) % PENDING_JOB_HASH_SIZE)
 
+/*
+ * Locking Note : enq/deq pending paths can be called from softirq as well as base 
+ * context. Necessary to do the irqsave/restore variants of the lock here.
+ */
 void 
 flashcache_enq_pending(struct cache_c *dmc, struct bio* bio,
 		       int index, int action, struct pending_job *job)
 {
 	struct pending_job **head;
+	unsigned long flags;
 	
+	VERIFY(!in_interrupt());
+	VERIFY(spin_is_locked(&dmc->cache_sets[index / dmc->assoc].set_spin_lock));
+	spin_lock_irqsave(&dmc->cache_pending_q_spinlock, flags);
 	head = &dmc->pending_job_hashbuckets[FLASHCACHE_PENDING_JOB_HASH(index)];
 	DPRINTK("flashcache_enq_pending: Queue to pending Q Index %d %llu",
 		index, bio->bi_sector);
@@ -158,9 +378,10 @@ flashcache_enq_pending(struct cache_c *dmc, struct bio* bio,
 	if (*head)
 		(*head)->prev = job;
 	*head = job;
+	atomic_inc(&dmc->pending_jobs_count);
+	spin_unlock_irqrestore(&dmc->cache_pending_q_spinlock, flags);
 	dmc->cache[index].nr_queued++;
 	dmc->flashcache_stats.enqueues++;
-	dmc->pending_jobs_count++;
 }
 
 /*
@@ -172,8 +393,10 @@ flashcache_deq_pending(struct cache_c *dmc, int index)
 	struct pending_job *node, *next, *movelist = NULL;
 	int moved = 0;
 	struct pending_job **head;
+	unsigned long flags;
 	
-	VERIFY(spin_is_locked(&dmc->cache_spin_lock));
+	VERIFY(!in_interrupt());
+	spin_lock_irqsave(&dmc->cache_pending_q_spinlock, flags);
 	head = &dmc->pending_job_hashbuckets[FLASHCACHE_PENDING_JOB_HASH(index)];
 	for (node = *head ; node != NULL ; node = next) {
 		next = node->next;
@@ -199,8 +422,9 @@ flashcache_deq_pending(struct cache_c *dmc, int index)
 			moved++;
 		}
 	}
-	VERIFY(dmc->pending_jobs_count >= moved);
-	dmc->pending_jobs_count -= moved;
+	VERIFY(atomic_read(&dmc->pending_jobs_count) >= moved);
+	atomic_sub(moved, &dmc->pending_jobs_count);
+	spin_unlock_irqrestore(&dmc->cache_pending_q_spinlock, flags);
 	return movelist;
 }
 
@@ -265,11 +489,12 @@ flashcache_store_checksum(struct kcached_job *job)
 {
 	u_int64_t sum;
 	unsigned long flags;
+	int set = index / dmc->assoc;
 	
 	sum = flashcache_compute_checksum(job->bio);
-	spin_lock_irqsave(&job->dmc->cache_spin_lock, flags);
+	spin_lock_irqsave(&dmc->cache_sets[set].set_spin_lock, flags);
 	job->dmc->cache[job->index].checksum = sum;
-	spin_unlock_irqrestore(&job->dmc->cache_spin_lock, flags);
+	spin_unlock_irqrestore(&dmc->cache_sets[set].set_spin_lock, flags);
 }
 
 int
@@ -278,9 +503,10 @@ flashcache_validate_checksum(struct kcached_job *job)
 	u_int64_t sum;
 	int retval;
 	unsigned long flags;
+	int set = index / dmc->assoc;
 	
 	sum = flashcache_compute_checksum(job->bio);
-	spin_lock_irqsave(&job->dmc->cache_spin_lock, flags);
+	spin_lock_irqsave(&dmc->cache_sets[set].set_spin_lock, flags);
 	if (likely(job->dmc->cache[job->index].checksum == sum)) {
 		job->dmc->flashcache_stats.checksum_valid++;		
 		retval = 0;
@@ -288,7 +514,7 @@ flashcache_validate_checksum(struct kcached_job *job)
 		job->dmc->flashcache_stats.checksum_invalid++;
 		retval = 1;
 	}
-	spin_unlock_irqrestore(&job->dmc->cache_spin_lock, flags);
+	spin_unlock_irqrestore(&dmc->cache_sets[set].set_spin_lock, flags);
 	return retval;
 }
 #endif
@@ -300,14 +526,13 @@ struct kcached_job *
 pop(struct list_head *jobs)
 {
 	struct kcached_job *job = NULL;
-	unsigned long flags;
 
-	spin_lock_irqsave(&_job_lock, flags);
+	spin_lock_irq(&_job_lock);
 	if (!list_empty(jobs)) {
 		job = list_entry(jobs->next, struct kcached_job, list);
 		list_del(&job->list);
 	}
-	spin_unlock_irqrestore(&_job_lock, flags);
+	spin_unlock_irq(&_job_lock);
 	return job;
 }
 
@@ -351,14 +576,22 @@ push_md_complete(struct kcached_job *job)
 	push(&_md_complete_jobs, job);	
 }
 
+#define FLASHCACHE_YIELD	32
+
 static void
 process_jobs(struct list_head *jobs,
 	     void (*fn) (struct kcached_job *))
 {
 	struct kcached_job *job;
+	int done = 0;
 
-	while ((job = pop(jobs)))
+	while ((job = pop(jobs))) {
+		if (done++ >= FLASHCACHE_YIELD) {
+			yield();
+			done = 0;
+		}
 		(void)fn(job);
+	}
 }
 
 void 
@@ -447,39 +680,6 @@ flashcache_bio_endio(struct bio *bio, int error,
 #endif	
 }
 
-void
-flashcache_reclaim_lru_movetail(struct cache_c *dmc, int index)
-{
-	int set = index / dmc->assoc;
-	int start_index = set * dmc->assoc;
-	int my_index = index - start_index;
-	struct cacheblock *cacheblk = &dmc->cache[index];
-
-	/* Remove from LRU */
-	if (likely((cacheblk->lru_prev != FLASHCACHE_LRU_NULL) ||
-		   (cacheblk->lru_next != FLASHCACHE_LRU_NULL))) {
-		if (cacheblk->lru_prev != FLASHCACHE_LRU_NULL)
-			dmc->cache[cacheblk->lru_prev + start_index].lru_next = 
-				cacheblk->lru_next;
-		else
-			dmc->cache_sets[set].lru_head = cacheblk->lru_next;
-		if (cacheblk->lru_next != FLASHCACHE_LRU_NULL)
-			dmc->cache[cacheblk->lru_next + start_index].lru_prev = 
-				cacheblk->lru_prev;
-		else
-			dmc->cache_sets[set].lru_tail = cacheblk->lru_prev;
-	}
-	/* And add it to LRU Tail */
-	cacheblk->lru_next = FLASHCACHE_LRU_NULL;
-	cacheblk->lru_prev = dmc->cache_sets[set].lru_tail;
-	if (dmc->cache_sets[set].lru_tail == FLASHCACHE_LRU_NULL)
-		dmc->cache_sets[set].lru_head = my_index;
-	else
-		dmc->cache[dmc->cache_sets[set].lru_tail + start_index].lru_next = 
-			my_index;
-	dmc->cache_sets[set].lru_tail = my_index;
-}
-
 static int 
 cmp_dbn(const void *a, const void *b)
 {
@@ -509,26 +709,36 @@ swap_dbn_index_pair(void *a, void *b, int size)
  */
 void
 flashcache_merge_writes(struct cache_c *dmc, struct dbn_index_pair *writes_list, 
+			struct dbn_index_pair *set_dirty_list,
 			int *nr_writes, int set)
+{
+	if (dmc->sysctl_new_style_write_merge)
+		flashcache_merge_writes_new(dmc, writes_list, 
+					    set_dirty_list,
+					    nr_writes, set);
+	else
+		flashcache_merge_writes_old(dmc, writes_list, 
+					    set_dirty_list,
+					    nr_writes, set);
+}
+
+static void
+flashcache_merge_writes_old(struct cache_c *dmc, struct dbn_index_pair *writes_list, 
+			    struct dbn_index_pair *set_dirty_list,
+			    int *nr_writes, int set)
 {	
 	int start_index = set * dmc->assoc;
 	int end_index = start_index + dmc->assoc;
 	int old_writes = *nr_writes;
 	int new_inserts = 0;
-	struct dbn_index_pair *set_dirty_list = NULL;
 	int ix, nr_set_dirty;
 	struct cacheblock *cacheblk;
-			
+
+	VERIFY(spin_is_locked(&dmc->cache_sets[set].set_spin_lock));
 	if (unlikely(*nr_writes == 0))
 		return;
 	sort(writes_list, *nr_writes, sizeof(struct dbn_index_pair),
 	     cmp_dbn, swap_dbn_index_pair);
-
-	set_dirty_list = kmalloc(dmc->assoc * sizeof(struct dbn_index_pair), GFP_ATOMIC);
-	if (set_dirty_list == NULL) {
-		dmc->flashcache_errors.memory_alloc_errors++;
-		goto out;
-	}
 	nr_set_dirty = 0;
 	for (ix = start_index ; ix < end_index ; ix++) {
 		cacheblk = &dmc->cache[ix];
@@ -543,7 +753,7 @@ flashcache_merge_writes(struct cache_c *dmc, struct dbn_index_pair *writes_list,
 		}
 	}
 	if (nr_set_dirty == 0)
-		goto out;
+		return;
 	sort(set_dirty_list, nr_set_dirty, sizeof(struct dbn_index_pair),
 	     cmp_dbn, swap_dbn_index_pair);
 	for (ix = 0 ; ix < nr_set_dirty ; ix++) {
@@ -620,9 +830,66 @@ flashcache_merge_writes(struct cache_c *dmc, struct dbn_index_pair *writes_list,
 		}
 	}
 	VERIFY((*nr_writes) == (old_writes + new_inserts));
-out:
-	if (set_dirty_list)
-		kfree(set_dirty_list);
+}
+
+static void
+flashcache_merge_writes_new(struct cache_c *dmc, struct dbn_index_pair *writes_list, 
+			    struct dbn_index_pair *set_dirty_list,
+			    int *nr_writes, int set)
+{
+	int dirty_blocks_in = *nr_writes;
+	struct cacheblock *cacheblk;
+	int i;
+	int neighbor;
+
+	VERIFY(spin_is_locked(&dmc->cache_sets[set].set_spin_lock));
+	if (unlikely(*nr_writes == 0))
+		return;
+	/*
+	 * Loop over the blocks, searching for neighbors backwards and forwards.
+	 * When we find a neighbor, tack it onto writes_list.
+	 */
+	for (i = 0 ; i < dirty_blocks_in ; i++) {
+		/* Look behind and keep merging as long as we can */
+		neighbor = flashcache_hash_lookup(dmc, set, writes_list[i].dbn - dmc->block_size);
+		while (neighbor != -1) {
+			cacheblk = &dmc->cache[neighbor];
+			VERIFY(cacheblk->cache_state & VALID);
+			if ((cacheblk->cache_state & (DIRTY | BLOCK_IO_INPROG)) == DIRTY) {
+				/* Found a dirty neighbor. Add it to the writes_list */
+				cacheblk->cache_state |= DISKWRITEINPROG;
+				flashcache_clear_fallow(dmc, neighbor);
+				VERIFY(*nr_writes < dmc->assoc);
+				writes_list[*nr_writes].index = neighbor;
+				writes_list[*nr_writes].dbn = cacheblk->dbn;
+				(*nr_writes)++;
+				dmc->flashcache_stats.back_merge++;
+				neighbor = flashcache_hash_lookup(dmc, set, cacheblk->dbn - dmc->block_size);
+			} else
+				neighbor = -1;
+		}
+		/* Look forward and keep merging as long as we can */
+		neighbor = flashcache_hash_lookup(dmc, set, writes_list[i].dbn + dmc->block_size);
+		while (neighbor != -1) {
+			cacheblk = &dmc->cache[neighbor];
+			VERIFY(cacheblk->cache_state & VALID);
+			if ((cacheblk->cache_state & (DIRTY | BLOCK_IO_INPROG)) == DIRTY) {
+				/* Found a dirty neighbor. Add it to the writes_list */
+				cacheblk->cache_state |= DISKWRITEINPROG;
+				flashcache_clear_fallow(dmc, neighbor);
+				VERIFY(*nr_writes < dmc->assoc);
+				writes_list[*nr_writes].index = neighbor;
+				writes_list[*nr_writes].dbn = cacheblk->dbn;
+				(*nr_writes)++;
+				dmc->flashcache_stats.front_merge++;
+				neighbor = flashcache_hash_lookup(dmc, set, cacheblk->dbn + dmc->block_size);
+			} else
+				neighbor = -1;
+		}
+	}
+	/* This may be unnecessary. But return the list of blocks to write out sorted */
+	sort(writes_list, *nr_writes, sizeof(struct dbn_index_pair), cmp_dbn, swap_dbn_index_pair);
+
 }
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,22)
@@ -755,12 +1022,94 @@ flashcache_update_sync_progress(struct cache_c *dmc)
 	
 	if (dmc->flashcache_stats.cleanings % 1000)
 		return;
-	if (!dmc->nr_dirty || !dmc->size || !printk_ratelimit())
+	if (!atomic_read(&dmc->nr_dirty) || !dmc->size || !printk_ratelimit())
 		return;
-	dirty_pct = ((u_int64_t)dmc->nr_dirty * 100) / dmc->size;
+	dirty_pct = ((u_int64_t)atomic_read(&dmc->nr_dirty) * 100) / dmc->size;
 	printk(KERN_INFO "Flashcache: Cleaning %d Dirty blocks, Dirty Blocks pct %llu%%", 
-	       dmc->nr_dirty, dirty_pct);
+	       atomic_read(&dmc->nr_dirty), dirty_pct);
 	printk(KERN_INFO "\r");
+}
+
+
+#define NUM_DISKCLEAN_BLOCKS	32
+
+int
+flashcache_diskclean_init(struct cache_c *dmc)
+{
+	int i;
+	void *buf;
+	struct diskclean_buf_ *diskclean_buf;
+
+	dmc->diskclean_buf_head = NULL;
+	spin_lock_init(&dmc->diskclean_list_lock);
+	/* Allocate the buffers and push them onto the list */
+	for (i = 0 ; i < NUM_DISKCLEAN_BLOCKS ; i++) {
+		buf = vmalloc(dmc->assoc * sizeof(struct dbn_index_pair));
+		if (!buf) {
+			/* Free everything allocated up to now and return error */
+			flashcache_diskclean_destroy(dmc);
+			return 1;
+		}
+		diskclean_buf = (struct diskclean_buf_ *)buf;
+		diskclean_buf->next = dmc->diskclean_buf_head;
+		dmc->diskclean_buf_head = diskclean_buf;
+	}
+	return 0;
+}
+
+void
+flashcache_diskclean_destroy(struct cache_c *dmc)
+{
+	struct diskclean_buf_ *diskclean_buf, *next;
+
+	diskclean_buf = dmc->diskclean_buf_head;
+	while (diskclean_buf != NULL) {
+		next = diskclean_buf->next;
+		vfree(diskclean_buf);
+		diskclean_buf = next;
+	}
+}
+
+int
+flashcache_diskclean_alloc(struct cache_c *dmc, 
+			   struct dbn_index_pair **buf1, struct dbn_index_pair **buf2)
+{
+	unsigned long flags;
+	int retval;
+	
+	*buf1 = NULL;
+	*buf2 = NULL;
+	spin_lock_irqsave(&dmc->diskclean_list_lock, flags);
+	if (dmc->diskclean_buf_head == NULL ||
+	    dmc->diskclean_buf_head->next == NULL) {
+		retval = ENOMEM;
+		goto out;
+	}
+	*buf1 = (struct dbn_index_pair *)dmc->diskclean_buf_head;
+	*buf2 = (struct dbn_index_pair *)dmc->diskclean_buf_head->next;
+	dmc->diskclean_buf_head = dmc->diskclean_buf_head->next->next;
+	retval = 0;
+out:
+	spin_unlock_irqrestore(&dmc->diskclean_list_lock, flags);
+	return retval;
+}
+
+void
+flashcache_diskclean_free(struct cache_c *dmc, struct dbn_index_pair *buf1, struct dbn_index_pair *buf2)
+{
+	unsigned long flags;
+	struct diskclean_buf_ *diskclean_buf;
+
+	VERIFY(buf1 != NULL);
+	VERIFY(buf2 != NULL);	
+	spin_lock_irqsave(&dmc->diskclean_list_lock, flags);
+	diskclean_buf = (struct diskclean_buf_ *)buf1;
+	diskclean_buf->next = dmc->diskclean_buf_head;
+	dmc->diskclean_buf_head = diskclean_buf;
+	diskclean_buf = (struct diskclean_buf_ *)buf2;
+	diskclean_buf->next = dmc->diskclean_buf_head;
+	dmc->diskclean_buf_head = diskclean_buf;
+	spin_unlock_irqrestore(&dmc->diskclean_list_lock, flags);
 }
 
 EXPORT_SYMBOL(flashcache_alloc_cache_job);
@@ -780,6 +1129,5 @@ EXPORT_SYMBOL(new_kcached_job);
 EXPORT_SYMBOL(flashcache_dm_io_sync_vm_callback);
 #endif
 EXPORT_SYMBOL(flashcache_dm_io_sync_vm);
-EXPORT_SYMBOL(flashcache_reclaim_lru_movetail);
 EXPORT_SYMBOL(flashcache_merge_writes);
 EXPORT_SYMBOL(flashcache_enq_pending);

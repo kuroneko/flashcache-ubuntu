@@ -25,6 +25,7 @@
  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
+#include <ctype.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <linux/fs.h>
@@ -39,6 +40,8 @@
 #include <string.h>
 #include <linux/types.h>
 #include <flashcache.h>
+
+#undef COMMIT_REV
 
 void
 usage(char *pname)
@@ -187,6 +190,7 @@ check_sure(void)
 	}
 }
 
+int
 main(int argc, char **argv)
 {
 	int cache_fd, disk_fd, c;
@@ -198,12 +202,13 @@ main(int argc, char **argv)
 	struct sysinfo i;
 	int cache_sectorsize;
 	int associativity = 512;
+	int disk_associativity = 512;
 	int ret;
 	int cache_mode = -1;
 	char *cache_mode_str;
 	
 	pname = argv[0];
-	while ((c = getopt(argc, argv, "fs:b:m:va:p:")) != -1) {
+	while ((c = getopt(argc, argv, "fs:b:d:m:va:p:")) != -1) {
 		switch (c) {
 		case 's':
 			cache_size = get_cache_size(optarg);
@@ -215,6 +220,9 @@ main(int argc, char **argv)
 			block_size = get_block_size(optarg);
 			/* Block size should be a power of 2 */
                         break;
+		case 'd':
+			disk_associativity = get_block_size(optarg);
+			break;
 		case 'm':
 			md_block_size = get_block_size(optarg);
 			/* MD block size should be a power of 2 */
@@ -336,16 +344,21 @@ main(int argc, char **argv)
 		fprintf(stderr, "You can reduce this with a smaller cache or a larger blocksize.\n");
 		check_sure();
 	}
-
+	if (disk_associativity == 0 ||
+	    disk_associativity > associativity) {
+		fprintf(stderr, "%s: Invalid Disk Associativity %ld\n",
+			pname, disk_associativity);
+		exit(1);
+	}
 	if (!force && cache_size > disk_devsize) {
 		fprintf(stderr, "Size of cache volume (%s) is larger than disk volume (%s)\n",
 			ssd_devname, disk_devname);
 		check_sure();
 	}
-	sprintf(dmsetup_cmd, "echo 0 %lu flashcache %s %s %s %d 2 %lu %lu %lu %lu"
+	sprintf(dmsetup_cmd, "echo 0 %lu flashcache %s %s %s %d 2 %lu %lu %d %lu %lu"
 		" | dmsetup create %s",
 		disk_devsize, disk_devname, ssd_devname, cachedev, cache_mode, block_size, 
-		cache_size, associativity, md_block_size,
+		cache_size, associativity, disk_associativity, md_block_size,
 		cachedev);
 
 	/* Go ahead and create the cache.
@@ -359,4 +372,5 @@ main(int argc, char **argv)
 		fprintf(stderr, "%s failed\n", dmsetup_cmd);
 		exit(1);
 	}
+	return 0;
 }
